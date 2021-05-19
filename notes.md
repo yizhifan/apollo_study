@@ -1,8 +1,8 @@
-#Piecewise_jerk_path_optimizer 
+# Piecewise_jerk_path_optimizer 
 ***
-##一、主要任务
+## 一、主要任务
 对不同任务下的reference line以及对应的可行驶区域（Boundary）通过optimizer求出最优path.
-##二、流程图
+## 二、流程图
 ``` flow
 st=>start: task.process
 e=>end: 输出轨迹
