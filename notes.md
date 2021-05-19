@@ -143,3 +143,73 @@ const auto& veh_param =
         path_boundary.boundary(), ddl_bounds, w, max_iter, &opt_l, &opt_dl,
         &opt_ddl);
 ```
+2. 设置默认终点位置权重，如果为pull over工况则更新为相应权重
+```mermaid
+  piecewise_jerk_problem.set_end_state_ref({1000.0, 0.0, 0.0}, end_state);
+  // pull over scenarios
+  // Because path reference might also make the end_state != 0
+  // we have to exclude this condition here
+  if (end_state[0] != 0 && !is_valid_path_reference) {
+    std::vector<double> x_ref(kNumKnots, end_state[0]);
+    const auto& pull_over_type = injector_->planning_context()
+                                     ->planning_status()
+                                     .pull_over()
+                                     .pull_over_type();
+    const double weight_x_ref =
+        pull_over_type == PullOverStatus::EMERGENCY_PULL_OVER ? 200.0 : 10.0;
+    piecewise_jerk_problem.set_x_ref(weight_x_ref, std::move(x_ref));
+  }
+```
+3. 构造二次规划结构，构造Cost Function权重以及约束条件
+```mermaid
+  piecewise_jerk_problem.set_weight_x(w[0]);
+  piecewise_jerk_problem.set_weight_dx(w[1]);
+  piecewise_jerk_problem.set_weight_ddx(w[2]);
+  piecewise_jerk_problem.set_weight_dddx(w[3]);
+
+  piecewise_jerk_problem.set_scale_factor({1.0, 10.0, 100.0});
+
+  auto start_time = std::chrono::system_clock::now();
+
+  piecewise_jerk_problem.set_x_bounds(lat_boundaries);
+  piecewise_jerk_problem.set_dx_bounds(-FLAGS_lateral_derivative_bound_default,
+                                       FLAGS_lateral_derivative_bound_default);
+  piecewise_jerk_problem.set_ddx_bounds(ddl_bounds);
+
+  // Estimate lat_acc and jerk boundary from vehicle_params
+  const auto& veh_param =
+      common::VehicleConfigHelper::GetConfig().vehicle_param();
+  const double axis_distance = veh_param.wheel_base();
+  const double max_yaw_rate =
+      veh_param.max_steer_angle_rate() / veh_param.steer_ratio() / 2.0;
+  const double jerk_bound = EstimateJerkBoundary(std::fmax(init_state[1], 1.0),
+                                                 axis_distance, max_yaw_rate);
+  piecewise_jerk_problem.set_dddx_bound(jerk_bound);
+```
+4. 调用Optimize（）函数构造P，A矩阵以及q向量，并调用osqp库解优化问题
+```mermaid
+bool success = piecewise_jerk_problem.Optimize(max_iter);
+```
+5. Optimize（）函数内部首先调用FormulateProblem（）函数构造P，A矩阵以及q向量
+```mermaid
+OSQPData* PiecewiseJerkProblem::FormulateProblem() {
+  // calculate kernel
+  std::vector<c_float> P_data;
+  std::vector<c_int> P_indices;
+  std::vector<c_int> P_indptr;
+  CalculateKernel(&P_data, &P_indices, &P_indptr);
+
+  // calculate affine constraints
+  std::vector<c_float> A_data;
+  std::vector<c_int> A_indices;
+  std::vector<c_int> A_indptr;
+  std::vector<c_float> lower_bounds;
+  std::vector<c_float> upper_bounds;
+  CalculateAffineConstraint(&A_data, &A_indices, &A_indptr, &lower_bounds,
+                            &upper_bounds);
+
+  // calculate offset
+  std::vector<c_float> q;
+  CalculateOffset(&q);
+```
+6. P、A矩阵采用csc矩阵构造方式，由于Cost Function不含有一次项，因此q向量为0
