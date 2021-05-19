@@ -1,8 +1,10 @@
 # Piecewise_jerk_path_optimizer 
 ***
 ## 一、主要任务
-对不同任务下的reference line以及对应的可行驶区域（Boundary）通过optimizer求出最优path.
-## 二、代码学习
+对不同任务下的reference line以及对应的可行驶区域（Boundary）通过optimizer求出最优path
+## 二、解决方法
+
+## 三、代码学习
 PiecewiseJerkPathOptimizer 规划器的核心函数为 Process（）
 ```
   common::Status Process(const SpeedData& speed_data,
@@ -19,7 +21,7 @@ PiecewiseJerkPathOptimizer 规划器的核心函数为 Process（）
 * Output
     * Frenet坐标系下路径点集
 ***
-### 2.1 预处理：
+### 2.1 预处理
 1. 将输入参数的坐标转换至Frenet坐标系下
 2. 根据任务载入预设权重向量（仅有两种选择：默认 or 换道）
 ```mermaid
@@ -104,3 +106,40 @@ if (path_boundary.label().find("regular") != std::string::npos &&
     }
 ```
 9. 读取车辆参数，根据动力学计算横向加速度ddl约束：k = tan（a）/ L； ay = k × vx^2
+最终约束为当前点边界线约束+车辆动力学约束
+```mermaid
+const auto& veh_param =
+        common::VehicleConfigHelper::GetConfig().vehicle_param();
+    const double lat_acc_bound =
+        std::tan(veh_param.max_steer_angle() / veh_param.steer_ratio()) /
+        veh_param.wheel_base();
+    std::vector<std::pair<double, double>> ddl_bounds;
+    for (size_t i = 0; i < path_boundary_size; ++i) {
+      double s = static_cast<double>(i) * path_boundary.delta_s() +
+                 path_boundary.start_s();
+      double kappa = reference_line.GetNearestReferencePoint(s).kappa();
+      ddl_bounds.emplace_back(-lat_acc_bound - kappa, lat_acc_bound - kappa);
+    }
+```
+### 2.2 二次规划
+1. 通过二次规划对路径进行优化，核心函数为OptimizePath（）
+    - Input：
+      - SL坐标系下初始L坐标
+      - 终点坐标
+      - SL坐标系下reference line 路径坐标
+      - 路径点数量
+      - 路径离散步长
+      - 路径有效标志位
+      - 路径边界
+      - 横向加速度ddl约束
+      - 权重向量
+      - 最大计算次数
+    - Output：
+      - SL坐标系下最优路径点坐标（l，dl，ddl）
+```mermaid
+    bool res_opt = OptimizePath(
+        init_frenet_state.second, end_state, std::move(path_reference_l),
+        path_reference_size, path_boundary.delta_s(), is_valid_path_reference,
+        path_boundary.boundary(), ddl_bounds, w, max_iter, &opt_l, &opt_dl,
+        &opt_ddl);
+```
