@@ -281,3 +281,88 @@ Input:
           ToPiecewiseJerkPath(opt_l, opt_dl, opt_ddl, path_boundary.delta_s(),
                               path_boundary.start_s());
 ```
+2. 取出第一个路径点，调用AppendSegment（）函数生成后续路径点
+```
+  PiecewiseJerkTrajectory1d piecewise_jerk_traj(x.front(), dx.front(),
+                                                ddx.front());
+
+  for (std::size_t i = 1; i < x.size(); ++i) {
+    const auto dddl = (ddx[i] - ddx[i - 1]) / delta_s;
+    piecewise_jerk_traj.AppendSegment(dddl, delta_s);
+  }
+```
+3. AppendSegment（）函数中将离散路径点起点坐标输入segments_中：
+````
+void PiecewiseJerkTrajectory1d::AppendSegment(const double jerk,
+                                              const double param) {
+  CHECK_GT(param, FLAGS_numerical_epsilon);
+
+  param_.push_back(param_.back() + param);
+
+  segments_.emplace_back(last_p_, last_v_, last_a_, jerk, param);
+
+  last_p_ = segments_.back().end_position();
+
+  last_v_ = segments_.back().end_velocity();
+
+  last_a_ = segments_.back().end_acceleration();
+}
+````
+4. 每个segments_初始化时会根据输入的路径坐标调用Evaluate（）函数计算下一个路径点坐标；  
+   计算方式是通过3次曲线方程拟合；  
+   最终获得离散步长为delta_s（与离散边界步长一致）的离散路径点集
+```
+ConstantJerkTrajectory1d::ConstantJerkTrajectory1d(const double p0,
+                                                   const double v0,
+                                                   const double a0,
+                                                   const double j,
+                                                   const double param)
+    : p0_(p0), v0_(v0), a0_(a0), param_(param), jerk_(j) {
+  CHECK_GT(param, FLAGS_numerical_epsilon);
+  p1_ = Evaluate(0, param_);
+  v1_ = Evaluate(1, param_);
+  a1_ = Evaluate(2, param_);
+}
+
+double ConstantJerkTrajectory1d::Evaluate(const std::uint32_t order,
+                                          const double param) const {
+  switch (order) {
+    case 0: {
+      return p0_ + v0_ * param + 0.5 * a0_ * param * param +
+             jerk_ * param * param * param / 6.0;
+    }
+    case 1: {
+      return v0_ + a0_ * param + 0.5 * jerk_ * param * param;
+    }
+    case 2: {
+      return a0_ + jerk_ * param;
+    }
+    case 3: {
+      return jerk_;
+    }
+    default:
+      return 0.0;
+  }
+```
+5. 根据预设的离散步长计算最终需要输出的path point
+````mermaid
+  std::vector<common::FrenetFramePoint> frenet_frame_path;
+  double accumulated_s = 0.0;
+  while (accumulated_s < piecewise_jerk_traj.ParamLength()) {
+    double l = piecewise_jerk_traj.Evaluate(0, accumulated_s);
+    double dl = piecewise_jerk_traj.Evaluate(1, accumulated_s);
+    double ddl = piecewise_jerk_traj.Evaluate(2, accumulated_s);
+
+    common::FrenetFramePoint frenet_frame_point;
+    frenet_frame_point.set_s(accumulated_s + start_s);
+    frenet_frame_point.set_l(l);
+    frenet_frame_point.set_dl(dl);
+    frenet_frame_point.set_ddl(ddl);
+    frenet_frame_path.push_back(std::move(frenet_frame_point));
+
+    accumulated_s += FLAGS_trajectory_space_resolution;
+  }
+````
+## Change Log
+>*2021.05.20    fanyizhi*
+> >add readme file
