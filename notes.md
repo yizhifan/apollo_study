@@ -3,6 +3,28 @@
 ## 一、主要任务
 对不同任务下的reference line以及对应的可行驶区域（Boundary）通过optimizer求出最优path
 ## 二、解决方法
+通过构造并求解二次规划问题获取最优路径  
+
+![二次规划的一般形式](https://i.loli.net/2021/05/20/k4QRlKGSf7mZpOU.png)  
+
+路径规划将SL坐标系下的（l,dl,ddl）作为优化量，构建成本函数：  
+
+
+- 目标是令l, dl, ddl，dddl最小，即偏离路径距离最小，横向速度最小，横向加速度最小，横向jerk最小  
+- dddl通过ddl差分求出，最终Cost Function形式如下：  
+
+![Cost Function](https://i.loli.net/2021/05/20/oetk1dx9ZFRKYwy.png)  
+
+- 构建P矩阵：  
+  ![Matrix P](https://i.loli.net/2021/05/20/5dyPaixY6gcQFRb.png)  
+  
+- 构造二次规划的约束条件：  
+  ![constrain](https://i.loli.net/2021/05/20/DCatKIU3j16JAye.png)  
+  
+  
+- 构建A矩阵，以及上下边界矩阵
+
+- 由于成本函数中不含有一次项，因此q为零向量
 
 ## 三、代码学习
 PiecewiseJerkPathOptimizer 规划器的核心函数为 Process（）
@@ -21,7 +43,7 @@ PiecewiseJerkPathOptimizer 规划器的核心函数为 Process（）
 * Output
     * Frenet坐标系下路径点集
 ***
-### 2.1 预处理
+### 3.1 预处理
 1. 将输入参数的坐标转换至Frenet坐标系下
 2. 根据任务载入预设权重向量（仅有两种选择：默认 or 换道）
 ```mermaid
@@ -121,7 +143,7 @@ const auto& veh_param =
       ddl_bounds.emplace_back(-lat_acc_bound - kappa, lat_acc_bound - kappa);
     }
 ```
-### 2.2 二次规划
+### 3.2 二次规划
 1. 通过二次规划对路径进行优化，核心函数为OptimizePath（）
     - Input：
       - SL坐标系下初始L坐标
@@ -212,4 +234,50 @@ OSQPData* PiecewiseJerkProblem::FormulateProblem() {
   std::vector<c_float> q;
   CalculateOffset(&q);
 ```
-6. P、A矩阵采用csc矩阵构造方式，由于Cost Function不含有一次项，因此q向量为0
+6. P、A矩阵采用csc矩阵构造方式，CalculateKernel（）以及 CalculateAffineConstraint（）分别构造csc矩阵所需的输入：  
+    1. 矩阵大小 m×n
+    2. 非零元素个数
+    3. 非零元素值
+    4. 非零元素行索引
+    5. 列指针  
+```mermaid
+data->P = csc_matrix(kernel_dim, kernel_dim, P_data.size(), CopyData(P_data),
+                       CopyData(P_indices), CopyData(P_indptr));
+data->A = csc_matrix(num_affine_constraint, kernel_dim, A_data.size(),
+                 CopyData(A_data), CopyData(A_indices), CopyData(A_indptr));
+```
++ CSC矩阵介绍：  
+  Compressed Sparse Column（CSC）矩阵构造方式是基于列添加非零元素的位置信息，结合非零元素值来构建矩阵.目的是为了减少矩阵储存空间  
+  *Example*：  
+  假设有如下矩阵:  
+  ```
+    1   0   4
+    0   3   5
+    2   0   6
+  ```
+  使用csc格式构造上述矩阵：  
+  ```
+  M = csc_matrix(3, 3, 6, Array(1,2,3,4,5,6), 
+                    Array(0,2,1,0,1,2), Array(0,2,3,6))
+  ```
+  其中3个Array：  
+  第一个由非零元素的值组成；  
+  第二个代表非零元素所在行的索引号；  
+  第三个的首元素固定为0，第二个元素是第一列非零元素的个数，第三个元素是前两列非零元素的个数...
+  ```
+  Array（1,2,3,4,5,6）
+  Array（0,2,1,0,1,2）
+  Array（0,2,3,6）
+  ```
+7. 调用osqp库求解，返回结果
+### 3.3 路径生成
+1. 调用ToPiecewiseJerkPath（）函数进行SL坐标系下的离散路径点生成  
+Input:  
+   * 最优路径（l, dl, ddl)
+    * 离散边界的步长
+    * 边界的起始位置
+```
+      auto frenet_frame_path =
+          ToPiecewiseJerkPath(opt_l, opt_dl, opt_ddl, path_boundary.delta_s(),
+                              path_boundary.start_s());
+```
